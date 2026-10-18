@@ -200,7 +200,7 @@ bool TemplatedLikeOperator(const char *sdata, idx_t slen, const char *pdata, idx
 				if (pidx + 1 == plen) {
 					throw SyntaxException("Like pattern must not end with escape character!");
 				}
-				if (pdata[pidx + 1] == schar) {
+				if (READER::Operation(pdata, pidx + 1) == schar) {
 					pidx += 2;
 					sidx++;
 					continue;
@@ -407,6 +407,24 @@ char GetEscapeChar(string_t escape) {
 	return escape.GetSize() == 0 ? '\0' : *escape.GetData();
 }
 
+string WithBackslashEscape(const char *data, idx_t size, char escape) {
+	string result;
+	result.reserve(size + 1);
+	for (idx_t i = 0; i < size; i++) {
+		if (data[i] == escape) {
+			result += '\\';
+			if (++i < size) {
+				result += data[i];
+			}
+		} else if (data[i] == '\\') {
+			result += "\\\\";
+		} else {
+			result += data[i];
+		}
+	}
+	return result;
+}
+
 struct LikeEscapeOperator {
 	template <class TA, class TB, class TC>
 	static inline bool Operation(TA str, TB pattern, TC escape) {
@@ -436,6 +454,13 @@ bool ILikeOperatorFunctionInternal(string_t &str, string_t &pattern, char escape
 	auto str_size = str.GetSize();
 	auto pat_data = pattern.GetData();
 	auto pat_size = pattern.GetSize();
+	string backslashed;
+	if (HAS_ESCAPE && escape != '\\') {
+		backslashed = WithBackslashEscape(pat_data, pat_size, escape);
+		pat_data = backslashed.data();
+		pat_size = backslashed.size();
+		escape = '\\';
+	}
 
 	// lowercase both the str and the pattern
 	idx_t str_llength = LowerLength(str_data, str_size);
@@ -548,6 +573,12 @@ void ILikeEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result
 		auto escape = *ConstantVector::GetData<string_t>(escape_vec);
 		char escape_char = GetEscapeChar(escape);
 		bool has_escape = escape.GetSize() != 0;
+		string backslashed;
+		if (has_escape && escape_char != '\\') {
+			backslashed = WithBackslashEscape(pattern.GetData(), pattern.GetSize(), escape_char);
+			pattern = string_t(backslashed.data(), UnsafeNumericCast<uint32_t>(backslashed.size()));
+			escape_char = '\\';
+		}
 
 		// lowercase the pattern exactly once, up front
 		idx_t pat_llength = LowerLength(pattern.GetData(), pattern.GetSize());
