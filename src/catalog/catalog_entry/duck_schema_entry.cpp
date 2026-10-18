@@ -582,6 +582,21 @@ static vector<LogicalDependency> SequencesOwnedByRemovedColumn(CatalogTransactio
 	return owned;
 }
 
+static void ReownOwnedSequences(Catalog &catalog, CatalogTransaction transaction, CatalogEntry &table,
+                                const AlterPermissionsInfo &info) {
+	for (auto &owned : catalog.GetDependencyManager()->OwnedEntries(transaction, table)) {
+		auto &sequence = owned.get();
+		if (sequence.type != CatalogType::SEQUENCE_ENTRY) {
+			continue;
+		}
+		auto &sequence_schema = sequence.ParentSchema(transaction);
+		AlterPermissionsInfo reown(CatalogType::SEQUENCE_ENTRY, sequence_schema.GetQualifiedName(sequence.name));
+		reown.new_owner = info.new_owner;
+		reown.new_owner_id = info.new_owner_id;
+		sequence_schema.Alter(transaction, reown);
+	}
+}
+
 void DuckSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 	if (info.type == AlterType::ALTER_PERMISSIONS && info.Cast<AlterPermissionsInfo>().all_in_schema) {
 		AlterAllInSchema(*this, transaction, info.Cast<AlterPermissionsInfo>());
@@ -636,6 +651,13 @@ void DuckSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 		}
 		if (!set.AlterEntry(transaction, name, info)) {
 			throw CatalogException::MissingEntry(type, name, string());
+		}
+		if (info.type == AlterType::ALTER_PERMISSIONS && !info.Cast<AlterPermissionsInfo>().new_owner.empty() &&
+		    catalog.Compatibility() == SqlCompatibility::POSTGRES) {
+			auto table = set.GetEntry(transaction, name);
+			if (table && table->type == CatalogType::TABLE_ENTRY) {
+				ReownOwnedSequences(catalog, transaction, *table, info.Cast<AlterPermissionsInfo>());
+			}
 		}
 		auto altered = owned_sequences.empty() ? nullptr : set.GetEntry(transaction, name);
 		for (auto &owned : owned_sequences) {
